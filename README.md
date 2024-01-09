@@ -19,7 +19,7 @@ Questions and suggestions may be sent to
 
 Downloading
 ----------
-[](https://nmap.org/download.html)
+[Download from main site](https://nmap.org/download.html)
 
 Installing
 ----------
