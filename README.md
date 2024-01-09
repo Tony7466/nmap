@@ -17,6 +17,10 @@ Full documentation is also available
 Questions and suggestions may be sent to
 [the Nmap-dev mailing list](https://nmap.org/mailman/listinfo/dev).
 
+Downloading
+----------
+[](https://nmap.org/download.html)
+
 Installing
 ----------
 Ideally, you should be able to just type:
