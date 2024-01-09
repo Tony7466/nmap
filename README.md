@@ -17,7 +17,7 @@ Full documentation is also available
 Questions and suggestions may be sent to
 [the Nmap-dev mailing list](https://nmap.org/mailman/listinfo/dev).
 
-Downloading
+Downloads
 ----------
 [Download from main site](https://nmap.org/download.html)
 
