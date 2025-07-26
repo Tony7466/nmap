@@ -6,7 +6,7 @@
  *                                                                         *
  ***********************IMPORTANT NSOCK LICENSE TERMS***********************
  *
- * The nsock parallel socket event library is (C) 1999-2023 Nmap Software LLC
+ * The nsock parallel socket event library is (C) 1999-2025 Nmap Software LLC
  * This library is free software; you may redistribute and/or modify it under
  * the terms of the GNU General Public License as published by the Free Software
  * Foundation; Version 2. This guarantees your right to use, modify, and
@@ -78,7 +78,6 @@
  *  (bri@ifokr.org) tests on an Pentium 686 against the ciphers listed. */
 #define CIPHERS_FAST "RC4-SHA:RC4-MD5:NULL-SHA:EXP-DES-CBC-SHA:EXP-EDH-RSA-DES-CBC-SHA:EXP-RC4-MD5:NULL-MD5:EDH-RSA-DES-CBC-SHA:EXP-RC2-CBC-MD5:EDH-RSA-DES-CBC3-SHA:EXP-ADH-RC4-MD5:DHE-RSA-AES128-SHA:DHE-RSA-AES256-SHA:EXP-ADH-DES-CBC-SHA:ADH-AES256-SHA:ADH-DES-CBC-SHA:ADH-RC4-MD5:AES256-SHA:DES-CBC-SHA:DES-CBC3-SHA:ADH-DES-CBC3-SHA:AES128-SHA:ADH-AES128-SHA:eNULL:ALL"
 
-extern struct timeval nsock_tod;
 #define NSOCK_SSL_STATE_UNINITIALIZED -1
 #define NSOCK_SSL_STATE_INITIALIZED 1
 #define NSOCK_SSL_STATE_ATEXIT 0
@@ -95,13 +94,13 @@ void nsp_ssl_cleanup(struct npool *nsp)
   {
     if (nsp->sslctx != NULL)
       SSL_CTX_free(nsp->sslctx);
-#ifdef HAVE_DTLS_CLIENT_METHOD
+#ifndef OPENSSL_NO_DTLS
     if (nsp->dtlsctx != NULL)
       SSL_CTX_free(nsp->dtlsctx);
 #endif
   }
   nsp->sslctx = NULL;
-#ifdef HAVE_DTLS_CLIENT_METHOD
+#ifndef OPENSSL_NO_DTLS
   nsp->dtlsctx = NULL;
 #endif
 }
@@ -198,7 +197,7 @@ nsock_ssl_ctx nsock_pool_ssl_init(nsock_pool ms_pool, int flags) {
   return nsock_pool_ssl_init_helper(ms->sslctx, flags);
 }
 
-#ifdef HAVE_DTLS_CLIENT_METHOD
+#ifndef OPENSSL_NO_DTLS
 
 /* Create an SSL_CTX and do initialisation, creating a DTLS client */
 static SSL_CTX *dtls_init_common() {

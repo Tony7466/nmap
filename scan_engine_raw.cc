@@ -5,7 +5,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2023 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -40,15 +40,16 @@
  * right to know exactly what a program is going to do before they run it.
  * This also allows you to audit the software for security holes.
  *
- * Source code also allows you to port Nmap to new platforms, fix bugs, and add
- * new features. You are highly encouraged to submit your changes as a Github PR
- * or by email to the dev@nmap.org mailing list for possible incorporation into
- * the main distribution. Unless you specify otherwise, it is understood that
- * you are offering us very broad rights to use your submissions as described in
- * the Nmap Public Source License Contributor Agreement. This is important
- * because we fund the project by selling licenses with various terms, and also
- * because the inability to relicense code has caused devastating problems for
- * other Free Software projects (such as KDE and NASM).
+ * Source code also allows you to port Nmap to new platforms, fix bugs, and
+ * add new features. You are highly encouraged to submit your changes as a
+ * Github PR or by email to the dev@nmap.org mailing list for possible
+ * incorporation into the main distribution. Unless you specify otherwise, it
+ * is understood that you are offering us very broad rights to use your
+ * submissions as described in the Nmap Public Source License Contributor
+ * Agreement. This is important because we fund the project by selling licenses
+ * with various terms, and also because the inability to relicense code has
+ * caused devastating problems for other Free Software projects (such as KDE
+ * and NASM).
  *
  * The free version of Nmap is distributed in the hope that it will be
  * useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -415,7 +416,7 @@ int get_ping_pcap_result(UltraScanInfo *USI, struct timeval *stime) {
                                        &linkhdr, true);
     gettimeofday(&USI->now, NULL);
     if (!ip_tmp) {
-      if (TIMEVAL_SUBTRACT(*stime, USI->now) < 0) {
+      if (TIMEVAL_BEFORE(*stime, USI->now)) {
         timedout = true;
         break;
       } else {
@@ -939,7 +940,7 @@ UltraProbe *sendArpScanProbe(UltraScanInfo *USI, HostScanStats *hss,
   gettimeofday(&USI->now, NULL);
   probe->sent = USI->now;
   hss->probeSent(sizeof(frame));
-  if ((rc = eth_send(USI->ethsd, frame, sizeof(frame))) != sizeof(frame)) {
+  if ((rc = netutil_eth_send(USI->ethsd, frame, sizeof(frame))) != sizeof(frame)) {
     int err = socket_errno();
     error("WARNING: eth_send of ARP packet returned %i rather than expected %d (errno=%i: %s)", rc, (int) sizeof(frame), err, strerror(err));
   }
@@ -968,13 +969,15 @@ UltraProbe *sendNDScanProbe(UltraScanInfo *USI, HostScanStats *hss,
   ns_dst_ip6 = *hss->target->v6hostip();
 
   if (USI->ethsd) {
-    unsigned char ns_dst_mac[6] = {0x33, 0x33, 0xff};
-    ns_dst_mac[3] = ns_dst_ip6.s6_addr[13];
-    ns_dst_mac[4] = ns_dst_ip6.s6_addr[14];
-    ns_dst_mac[5] = ns_dst_ip6.s6_addr[15];
+    if (netutil_eth_datalink(USI->ethsd) == DLT_EN10MB) {
+      unsigned char ns_dst_mac[6] = {0x33, 0x33, 0xff};
+      ns_dst_mac[3] = ns_dst_ip6.s6_addr[13];
+      ns_dst_mac[4] = ns_dst_ip6.s6_addr[14];
+      ns_dst_mac[5] = ns_dst_ip6.s6_addr[15];
 
-    memcpy(eth.srcmac, hss->target->SrcMACAddress(), 6);
-    memcpy(eth.dstmac, ns_dst_mac, 6);
+      memcpy(eth.srcmac, hss->target->SrcMACAddress(), 6);
+      memcpy(eth.dstmac, ns_dst_mac, 6);
+    }
     eth.ethsd = USI->ethsd;
     eth.devname[0] = '\0';
     ethptr = &eth;
@@ -1158,8 +1161,10 @@ UltraProbe *sendIPScanProbe(UltraScanInfo *USI, HostScanStats *hss,
   u16 icmp_ident = (get_random_u16() % 0xffff) + 1;
 
   if (USI->ethsd) {
-    memcpy(eth.srcmac, hss->target->SrcMACAddress(), 6);
-    memcpy(eth.dstmac, hss->target->NextHopMACAddress(), 6);
+    if (netutil_eth_datalink(USI->ethsd) == DLT_EN10MB) {
+      memcpy(eth.srcmac, hss->target->SrcMACAddress(), 6);
+      memcpy(eth.dstmac, hss->target->NextHopMACAddress(), 6);
+    }
     eth.ethsd = USI->ethsd;
     eth.devname[0] = '\0';
     ethptr = &eth;
@@ -1433,7 +1438,7 @@ bool get_arp_result(UltraScanInfo *USI, struct timeval *stime) {
     if (rc == -1)
       fatal("Received -1 response from read_arp_reply_pcap");
     if (rc == 0) {
-      if (TIMEVAL_SUBTRACT(*stime, USI->now) < 0) {
+      if (TIMEVAL_BEFORE(*stime, USI->now)) {
         timedout = true;
         break;
       } else {
@@ -1512,7 +1517,7 @@ bool get_ns_result(UltraScanInfo *USI, struct timeval *stime) {
     if (rc == -1)
       fatal("Received -1 response from read_arp_reply_pcap");
     if (rc == 0) {
-      if (TIMEVAL_SUBTRACT(*stime, USI->now) < 0) {
+      if (TIMEVAL_BEFORE(*stime, USI->now)) {
         timedout = true;
         break;
       } else {
@@ -1610,7 +1615,7 @@ bool get_pcap_result(UltraScanInfo *USI, struct timeval *stime) {
       to_usec = 2000;
     ip_tmp = (struct ip *) readip_pcap(USI->pd, &bytes, to_usec, &rcvdtime, &linkhdr, true);
     gettimeofday(&USI->now, NULL);
-    if (!ip_tmp && TIMEVAL_SUBTRACT(*stime, USI->now) < 0) {
+    if (!ip_tmp && TIMEVAL_BEFORE(*stime, USI->now)) {
       timedout = true;
       break;
     } else if (!ip_tmp)

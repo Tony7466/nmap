@@ -2,7 +2,7 @@
 
 # ***********************IMPORTANT NMAP LICENSE TERMS************************
 # *
-# * The Nmap Security Scanner is (C) 1996-2023 Nmap Software LLC ("The Nmap
+# * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
 # * Project"). Nmap is also a registered trademark of the Nmap Project.
 # *
 # * This program is distributed under the terms of the Nmap Public Source
@@ -37,15 +37,16 @@
 # * right to know exactly what a program is going to do before they run it.
 # * This also allows you to audit the software for security holes.
 # *
-# * Source code also allows you to port Nmap to new platforms, fix bugs, and add
-# * new features. You are highly encouraged to submit your changes as a Github PR
-# * or by email to the dev@nmap.org mailing list for possible incorporation into
-# * the main distribution. Unless you specify otherwise, it is understood that
-# * you are offering us very broad rights to use your submissions as described in
-# * the Nmap Public Source License Contributor Agreement. This is important
-# * because we fund the project by selling licenses with various terms, and also
-# * because the inability to relicense code has caused devastating problems for
-# * other Free Software projects (such as KDE and NASM).
+# * Source code also allows you to port Nmap to new platforms, fix bugs, and
+# * add new features. You are highly encouraged to submit your changes as a
+# * Github PR or by email to the dev@nmap.org mailing list for possible
+# * incorporation into the main distribution. Unless you specify otherwise, it
+# * is understood that you are offering us very broad rights to use your
+# * submissions as described in the Nmap Public Source License Contributor
+# * Agreement. This is important because we fund the project by selling licenses
+# * with various terms, and also because the inability to relicense code has
+# * caused devastating problems for other Free Software projects (such as KDE
+# * and NASM).
 # *
 # * The free version of Nmap is distributed in the hope that it will be
 # * useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -82,7 +83,7 @@ UNKNOWN_SERVICE_COLOR = '#d5d5d5'
 TRACE_HEADER = ['TTL', 'RTT', 'IP', _('Hostname')]
 
 TRACE_TEXT = _(
-    "Traceroute on port <b>%s/%s</b> totalized <b>%d</b> known hops.")
+    "Traceroute on port <b>%(port)s/%(proto)s</b> took <b>%(hops)d</b> known hops.")
 
 NO_TRACE_TEXT = _("No traceroute information available.")
 
@@ -97,7 +98,7 @@ OSCLASS_HEADER = ['%', _('Vendor'), _('Type'), _('Family'), _('Version')]
 USED_PORTS_TEXT = "%d/%s %s"
 
 TCP_SEQ_NOTE = _("""\
-<b>*</b> TCP sequence <i>index</i> equal to %d and <i>difficulty</i> is "%s".\
+<b>*</b> TCP sequence <i>index</i> equal to %(index)d and <i>difficulty</i> is "%(difficulty)s".\
 """)
 
 
@@ -219,7 +220,7 @@ class ServicesPage(Gtk.Notebook):
 
                 if key in ['servicefp']:
 
-                    text = _('[%d] service: %s') % (port['id'], key)
+                    text = _('[%(port)d] service: %(servicefp)s') % (port['id'], key)
 
                     self.__select_combobox.append_text(text)
                     self.__text.append(port['service'][key])
@@ -419,10 +420,7 @@ class SystemPage(BWScrolledWindow):
 
             self.__uptime_label = BWSectionLabel(_('Last boot:'))
 
-            seconds = self.__node.get_info('uptime')['seconds']
-            lastboot = self.__node.get_info('uptime')['lastboot']
-
-            text = _('%s (%s seconds).') % (lastboot, seconds)
+            text = _('%(lastboot)s (%(seconds)s seconds).') % self.__node.get_info('uptime')
 
             self.__uptime_value = BWLabel(text)
             self.__uptime_value.set_selectable(True)
@@ -731,9 +729,9 @@ class TraceroutePage(BWVBox):
 
             self.__trace_scroll.add_with_viewport(self.__trace_treeview)
 
-            self.__trace_info = (self.__node.get_info('trace')['port'],
-                                 self.__node.get_info('trace')['protocol'],
-                                 len(self.__node.get_info('trace')['hops']))
+            self.__trace_info = {'port': self.__node.get_info('trace')['port'],
+                                 'proto': self.__node.get_info('trace')['protocol'],
+                                 'hops': len(self.__node.get_info('trace')['hops'])}
 
             self.__trace_label = BWLabel(TRACE_TEXT % self.__trace_info)
             self.__trace_label.set_use_markup(True)

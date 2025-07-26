@@ -6,7 +6,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2023 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -41,15 +41,16 @@
  * right to know exactly what a program is going to do before they run it.
  * This also allows you to audit the software for security holes.
  *
- * Source code also allows you to port Nmap to new platforms, fix bugs, and add
- * new features. You are highly encouraged to submit your changes as a Github PR
- * or by email to the dev@nmap.org mailing list for possible incorporation into
- * the main distribution. Unless you specify otherwise, it is understood that
- * you are offering us very broad rights to use your submissions as described in
- * the Nmap Public Source License Contributor Agreement. This is important
- * because we fund the project by selling licenses with various terms, and also
- * because the inability to relicense code has caused devastating problems for
- * other Free Software projects (such as KDE and NASM).
+ * Source code also allows you to port Nmap to new platforms, fix bugs, and
+ * add new features. You are highly encouraged to submit your changes as a
+ * Github PR or by email to the dev@nmap.org mailing list for possible
+ * incorporation into the main distribution. Unless you specify otherwise, it
+ * is understood that you are offering us very broad rights to use your
+ * submissions as described in the Nmap Public Source License Contributor
+ * Agreement. This is important because we fund the project by selling licenses
+ * with various terms, and also because the inability to relicense code has
+ * caused devastating problems for other Free Software projects (such as KDE
+ * and NASM).
  *
  * The free version of Nmap is distributed in the hope that it will be
  * useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -109,6 +110,9 @@
 
 extern NmapOps o;
 
+#define SERVICE_FIELD_LEN 80
+#define SERVICE_EXTRA_LEN 256
+#define SERVICE_TYPE_LEN 32
 // Details on a particular service (open port) we are trying to match
 class ServiceNFO {
 public:
@@ -116,7 +120,7 @@ public:
   ~ServiceNFO();
 
   // If a service response to a given probeName, this function adds
-  // the response the the fingerprint for that service.  The
+  // the response the fingerprint for that service.  The
   // fingerprint can be printed when nothing matches the service.  You
   // can obtain the fingerprint (if any) via getServiceFingerprint();
   void addToServiceFingerprint(const char *probeName, const u8 *resp,
@@ -136,15 +140,15 @@ public:
   const char *probe_matched;
   // If a match is found, any product/version/info/hostname/ostype/devicetype
   // is placed in these 6 strings.  Otherwise the string will be 0 length.
-  char product_matched[80];
-  char version_matched[80];
-  char extrainfo_matched[256];
-  char hostname_matched[80];
-  char ostype_matched[32];
-  char devicetype_matched[32];
-  char cpe_a_matched[80];
-  char cpe_h_matched[80];
-  char cpe_o_matched[80];
+  char product_matched[SERVICE_FIELD_LEN];
+  char version_matched[SERVICE_FIELD_LEN];
+  char extrainfo_matched[SERVICE_EXTRA_LEN];
+  char hostname_matched[SERVICE_FIELD_LEN];
+  char ostype_matched[SERVICE_TYPE_LEN];
+  char devicetype_matched[SERVICE_TYPE_LEN];
+  char cpe_a_matched[SERVICE_FIELD_LEN];
+  char cpe_h_matched[SERVICE_FIELD_LEN];
+  char cpe_o_matched[SERVICE_FIELD_LEN];
   enum service_tunnel_type tunnel; /* SERVICE_TUNNEL_NONE, SERVICE_TUNNEL_SSL */
   // This stores our SSL session id, which will help speed up subsequent
   // SSL connections.  It's overwritten each time.  void* is used so we don't
@@ -215,6 +219,7 @@ public:
   unsigned int ideal_parallelism; // Max (and desired) number of probes out at once.
   ScanProgressMeter *SPM;
   int num_hosts_timedout; // # of hosts timed out during (or before) scan
+  bool busy; // Recursion guard; if true, don't start any new events
 };
 
 #define SUBSTARGS_MAX_ARGS 5
@@ -515,13 +520,13 @@ void ServiceProbeMatch::InitMatch(const char *matchtext, int lineno) {
   // NULL.
 const struct MatchDetails *ServiceProbeMatch::testMatch(const u8 *buf, int buflen) {
   int rc;
-  static char product[80];
-  static char version[80];
-  static char info[256];  /* We will truncate with ... later */
-  static char hostname[80];
-  static char ostype[32];
-  static char devicetype[32];
-  static char cpe_a[80], cpe_h[80], cpe_o[80];
+  static char product[SERVICE_FIELD_LEN];
+  static char version[SERVICE_FIELD_LEN];
+  static char info[SERVICE_EXTRA_LEN];  /* We will truncate with ... later */
+  static char hostname[SERVICE_FIELD_LEN];
+  static char ostype[SERVICE_TYPE_LEN];
+  static char devicetype[SERVICE_TYPE_LEN];
+  static char cpe_a[SERVICE_FIELD_LEN], cpe_h[SERVICE_FIELD_LEN], cpe_o[SERVICE_FIELD_LEN];
   char *bufc = (char *) buf;
   assert(isInitialized);
 
@@ -531,17 +536,20 @@ const struct MatchDetails *ServiceProbeMatch::testMatch(const u8 *buf, int bufle
 
   rc = pcre2_match(regex_compiled, (PCRE2_SPTR8)bufc, buflen, 0, 0, match_data, match_context);
   if (rc < 0) {
-    if (rc == PCRE2_ERROR_MATCHLIMIT) {
-      if (o.debugging || o.verbose > 1)
-        error("Warning: Hit PCRE_ERROR_MATCHLIMIT when probing for service %s with the regex '%s'", servicename, matchstr);
-    } else
-    if (rc == PCRE2_ERROR_RECURSIONLIMIT) {
-      if (o.debugging || o.verbose > 1)
-        error("Warning: Hit PCRE_ERROR_RECURSIONLIMIT when probing for service %s with the regex '%s'", servicename, matchstr);
-    } else
-      if (rc != PCRE2_ERROR_NOMATCH) {
-        fatal("Unexpected PCRE error (%d) when probing for service %s with the regex '%s'", rc, servicename, matchstr);
+    // Probably just didn't match. However, PCRE2 errors may happen with bad
+    // patterns. We want to know, but don't abandon the whole scan.
+    if (rc != PCRE2_ERROR_NOMATCH) {
+      if (o.verbose || o.debugging) {
+        error("Warning: PCRE2 error %d when probing for service %s with the regex '%s'", rc, servicename, matchstr);
       }
+      if (o.debugging) {
+        pcre2_get_error_message(rc, (unsigned char *)info, SERVICE_EXTRA_LEN);
+        error("PCRE2 error message: %s", info);
+        if (o.debugging > 1) {
+          error("Service data: \n%s", hexdump(buf, buflen));
+        }
+      }
+    }
   } else {
     // Yeah!  Match apparently succeeded.
     // Now lets get the version number if available
@@ -2001,6 +2009,7 @@ ServiceGroup::ServiceGroup(std::vector<Target *> &Targets, AllProbes *AP) {
   min_par = o.min_parallelism;
   max_par = MAX(min_par, o.max_parallelism ? o.max_parallelism : 100);
   ideal_parallelism = box(min_par, max_par, desired_par);
+  busy = false;
 }
 
 ServiceGroup::~ServiceGroup() {
@@ -2050,6 +2059,7 @@ static void adjustPortStateIfNecessary(ServiceNFO *svc) {
                              ServiceProbe *probe) {
     const u8 *probestring;
     int probestringlen;
+    ServiceGroup *SG = (ServiceGroup *) nsock_pool_get_udata(nsp);
 
     // Report data as probes are sent if --version-trace has been requested
     if (o.debugging > 1 || o.versionTrace()) {
@@ -2062,8 +2072,10 @@ static void adjustPortStateIfNecessary(ServiceNFO *svc) {
     probestring = probe->getProbeString(&probestringlen);
     assert(probestringlen > 0);
     // Now we write the string to the IOD
+    SG->busy = true;
     nsock_write(nsp, nsi, servicescan_write_handler, svc->probe_timemsleft(probe), svc,
                 (const char *) probestring, probestringlen);
+    SG->busy = false;
     return 0;
   }
 
@@ -2087,8 +2099,10 @@ static void startNextProbe(nsock_pool nsp, nsock_iod nsi, ServiceGroup *SG,
     if (probe) {
       svc->currentprobe_exec_time = *nsock_gettimeofday();
       send_probe_text(nsp, nsi, svc, probe);
-      nsock_read(nsp, nsi, servicescan_read_handler,
-                 svc->probe_timemsleft(probe, nsock_gettimeofday()), svc);
+      if (svc->probe_state < PROBESTATE_FINISHED_HARDMATCHED) {
+        nsock_read(nsp, nsi, servicescan_read_handler,
+            svc->probe_timemsleft(probe, nsock_gettimeofday()), svc);
+      }
     } else {
       // Should only happen if someone has a highly perverse nmap-service-probes
       // file.  Null scan should generally never be the only probe.
@@ -2285,6 +2299,11 @@ static void end_svcprobe(enum serviceprobestate probe_state, ServiceGroup *SG, S
 static int launchSomeServiceProbes(nsock_pool nsp, ServiceGroup *SG) {
   ServiceNFO *svc;
   static int warn_no_scanning=1;
+  if (SG->busy) {
+    // "busy" means a Nsock callback is being called synchronously;
+    // Don't launch any probes or we risk runaway recursion.
+    return 0;
+  }
 
   while (SG->services_in_progress.size() < SG->ideal_parallelism &&
          !SG->services_remaining.empty()) {
@@ -2362,7 +2381,9 @@ static void servicescan_connect_handler(nsock_pool nsp, nsock_event nse, void *m
     svc->currentprobe_exec_time = *nsock_gettimeofday();
     send_probe_text(nsp, nsi, svc, probe);
     // Now let us read any results
-    nsock_read(nsp, nsi, servicescan_read_handler, svc->probe_timemsleft(probe, nsock_gettimeofday()), svc);
+    if (svc->probe_state < PROBESTATE_FINISHED_HARDMATCHED) {
+      nsock_read(nsp, nsi, servicescan_read_handler, svc->probe_timemsleft(probe, nsock_gettimeofday()), svc);
+    }
   } else {
     switch(status) {
       case NSE_STATUS_TIMEOUT:
@@ -2583,6 +2604,7 @@ static void servicescan_read_handler(nsock_pool nsp, nsock_event nse, void *myda
   } else if (status == NSE_STATUS_ERROR) {
     // Errors might happen in some cases ... I'll worry about later
     int err = nse_errorcode(nse);
+    bool show_err = true;
     switch(err) {
     case ECONNRESET:
     case ECONNREFUSED: // weird to get this on a connected socket (shrug) but
@@ -2597,22 +2619,6 @@ static void servicescan_read_handler(nsock_pool nsp, nsock_event nse, void *myda
         // next one
         startNextProbe(nsp, nsi, SG, svc, true);
       }
-      break;
-#ifdef EHOSTDOWN
-    case EHOSTDOWN: // ICMP_HOST_UNKNOWN
-#endif
-#ifdef ENONET
-    case ENONET: // ICMP_HOST_ISOLATED
-#endif
-    /* EHOSTDOWN and ENONET can be the result of forged ICMP responses.
-     * We should probably give up on this port.
-     */
-    case ENETUNREACH:
-    case EHOSTUNREACH:
-      // That is funny.  The port scanner listed the port as open.  Maybe it got unplugged, or firewalled us, or did
-      // something else nasty during the scan.  Shrug.  I'll give up on this port
-      svc->tcpwrap_possible = false;
-      end_svcprobe(PROBESTATE_INCOMPLETE, SG, svc, nsi);
       break;
 #ifdef ENOPROTOOPT
     case ENOPROTOOPT: // ICMP_PROT_UNREACH
@@ -2644,9 +2650,29 @@ static void servicescan_read_handler(nsock_pool nsp, nsock_event nse, void *myda
       // hardcoded to EIO).  I'll just try the next probe.
       startNextProbe(nsp, nsi, SG, svc, true);
       break;
+#ifdef EHOSTDOWN
+    case EHOSTDOWN: // ICMP_HOST_UNKNOWN
+#endif
+#ifdef ENONET
+    case ENONET: // ICMP_HOST_ISOLATED
+#endif
+    /* EHOSTDOWN and ENONET can be the result of forged ICMP responses.
+     * We should probably give up on this port.
+     */
+    case ENETUNREACH:
+    case EHOSTUNREACH:
+    case ENETDOWN:
+      // That is funny.  The port scanner listed the port as open.  Maybe it got unplugged, or firewalled us, or did
+      // something else nasty during the scan.  Shrug.  I'll give up on this port
+      show_err = o.debugging || o.versionTrace();
     default:
-      fatal("Unexpected error in NSE_TYPE_READ callback.  Error code: %d (%s)", err,
-            socket_strerror(err));
+      if (show_err) {
+        error("Unexpected error %d (%s) in NSE_TYPE_READ callback - aborting this service",
+            err, socket_strerror(err));
+      }
+      svc->tcpwrap_possible = false;
+      end_svcprobe(PROBESTATE_INCOMPLETE, SG, svc, nsi);
+      break;
     }
   } else if (status == NSE_STATUS_KILL) {
     /* User probably specified host_timeout and so the service scan is
@@ -2805,7 +2831,8 @@ int service_scan(std::vector<Target *> &Targets) {
   nmap_set_nsock_logger();
   nmap_adjust_loglevel(o.versionTrace());
 
-  nsock_pool_set_device(nsp, o.device);
+  if (*o.device)
+    nsock_pool_set_device(nsp, o.device);
 
   if (o.proxy_chain) {
     nsock_pool_set_proxychain(nsp, o.proxy_chain);

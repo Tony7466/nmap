@@ -3,7 +3,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2023 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -38,15 +38,16 @@
  * right to know exactly what a program is going to do before they run it.
  * This also allows you to audit the software for security holes.
  *
- * Source code also allows you to port Nmap to new platforms, fix bugs, and add
- * new features. You are highly encouraged to submit your changes as a Github PR
- * or by email to the dev@nmap.org mailing list for possible incorporation into
- * the main distribution. Unless you specify otherwise, it is understood that
- * you are offering us very broad rights to use your submissions as described in
- * the Nmap Public Source License Contributor Agreement. This is important
- * because we fund the project by selling licenses with various terms, and also
- * because the inability to relicense code has caused devastating problems for
- * other Free Software projects (such as KDE and NASM).
+ * Source code also allows you to port Nmap to new platforms, fix bugs, and
+ * add new features. You are highly encouraged to submit your changes as a
+ * Github PR or by email to the dev@nmap.org mailing list for possible
+ * incorporation into the main distribution. Unless you specify otherwise, it
+ * is understood that you are offering us very broad rights to use your
+ * submissions as described in the Nmap Public Source License Contributor
+ * Agreement. This is important because we fund the project by selling licenses
+ * with various terms, and also because the inability to relicense code has
+ * caused devastating problems for other Free Software projects (such as KDE
+ * and NASM).
  *
  * The free version of Nmap is distributed in the hope that it will be
  * useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -107,6 +108,7 @@ individually.
 #include "NmapOps.h"
 #include "Target.h"
 #include "tcpip.h"
+#include "utils.h"
 
 #include "struct_ip.h"
 
@@ -227,7 +229,7 @@ public:
   ~HostState();
   bool has_more_probes() const;
   bool is_finished() const;
-  bool send_next_probe(int rawsd, eth_t *ethsd);
+  bool send_next_probe(int rawsd, netutil_eth_t *ethsd);
   void next_ttl();
   void count_up();
   int cancel_probe(std::list<Probe *>::iterator it);
@@ -260,8 +262,8 @@ public:
 
   Probe(HostState *host, struct probespec pspec, u8 ttl);
   virtual ~Probe();
-  void send(int rawsd, eth_t *ethsd, struct timeval *now = NULL);
-  void resend(int rawsd, eth_t *ethsd, struct timeval *now = NULL);
+  void send(int rawsd, netutil_eth_t *ethsd, struct timeval *now = NULL);
+  void resend(int rawsd, netutil_eth_t *ethsd, struct timeval *now = NULL);
   bool is_timedout(struct timeval *now = NULL) const;
   bool may_resend() const;
   virtual unsigned char *build_packet(const struct sockaddr_storage *source,
@@ -290,7 +292,7 @@ public:
   double completion_fraction() const;
 
 private:
-  eth_t *ethsd;
+  netutil_eth_t *ethsd;
   int rawsd;
   pcap_t *pd;
   int num_active_probes;
@@ -312,7 +314,7 @@ static unsigned int hop_cache_size();
 
 HostState::HostState(Target *target) : sent_ttls(MAX_TTL + 1, false) {
   this->target = target;
-  current_ttl = MIN(MAX(1, HostState::distance_guess(target)), MAX_TTL);
+  current_ttl = box(1, MAX_TTL, (int)HostState::distance_guess(target));
   state = HostState::COUNTING_DOWN;
   reached_target = 0;
   pspec = HostState::get_probe(target);
@@ -346,7 +348,7 @@ bool HostState::is_finished() const {
     && active_probes.empty() && pending_resends.empty();
 }
 
-bool HostState::send_next_probe(int rawsd, eth_t *ethsd) {
+bool HostState::send_next_probe(int rawsd, netutil_eth_t *ethsd) {
   Probe *probe;
 
   /* Do a resend if possible. */
@@ -587,15 +589,17 @@ Probe::Probe(HostState *host, struct probespec pspec, u8 ttl) {
 Probe::~Probe() {
 }
 
-void Probe::send(int rawsd, eth_t *ethsd, struct timeval *now) {
+void Probe::send(int rawsd, netutil_eth_t *ethsd, struct timeval *now) {
   struct eth_nfo eth;
   struct eth_nfo *ethp;
   int decoy;
 
   /* Set up the Ethernet handle if we're using that. */
   if (ethsd != NULL) {
-    memcpy(eth.srcmac, host->target->SrcMACAddress(), 6);
-    memcpy(eth.dstmac, host->target->NextHopMACAddress(), 6);
+    if (netutil_eth_datalink(ethsd) == DLT_EN10MB) {
+      memcpy(eth.srcmac, host->target->SrcMACAddress(), 6);
+      memcpy(eth.dstmac, host->target->NextHopMACAddress(), 6);
+    }
     eth.ethsd = ethsd;
     eth.devname[0] = '\0';
     ethp = &eth;
@@ -621,7 +625,7 @@ void Probe::send(int rawsd, eth_t *ethsd, struct timeval *now) {
   }
 }
 
-void Probe::resend(int rawsd, eth_t *ethsd, struct timeval *now) {
+void Probe::resend(int rawsd, netutil_eth_t *ethsd, struct timeval *now) {
   num_resends++;
   this->send(rawsd, ethsd, now);
 }
@@ -833,21 +837,8 @@ TracerouteState::TracerouteState(std::vector<Target *> &targets) {
 
   assert(targets.size() > 0);
 
-  if ((o.sendpref & PACKET_SEND_ETH) && targets[0]->ifType() == devt_ethernet) {
-    /* No need to check for g_has_npcap_loopback on WIN32 because devt_loopback
-     * is checked earlier. */
-    ethsd = eth_open_cached(targets[0]->deviceName());
-    if (ethsd == NULL)
-      fatal("dnet: failed to open device %s", targets[0]->deviceName());
-    rawsd = -1;
-  } else {
-#ifdef WIN32
-    win32_fatal_raw_sockets(targets[0]->deviceName());
-#endif
-    rawsd = nmap_raw_socket();
-    if (rawsd < 0)
-      pfatal("traceroute: socket troubles");
-    ethsd = NULL;
+  if (!raw_socket_or_eth(o.sendpref, targets[0]->deviceName(), &rawsd, &ethsd)) {
+    fatal("traceroute: socket troubles");
   }
 
   /* Assume that all the targets share the same device. */
@@ -1332,7 +1323,6 @@ void TracerouteState::resolve_hops() {
   std::set<sockaddr_storage, lt_sockaddr_storage>::iterator addr_iter;
   std::vector<HostState *>::iterator host_iter;
   std::map<sockaddr_storage, const char *, lt_sockaddr_storage> name_map;
-  Target **targets;
   Hop *hop;
   int i, n;
 
@@ -1346,43 +1336,32 @@ void TracerouteState::resolve_hops() {
     }
   }
   n = addrs.size();
-  /* Second, make an array of pointer to Target to suit the interface of
-     nmap_mass_rdns. */
-  targets = (Target **) safe_malloc(sizeof(*targets) * n);
-  i = 0;
-  addr_iter = addrs.begin();
-  while (i < n) {
-    targets[i] = new Target();
-    targets[i]->setTargetSockAddr(&*addr_iter, sizeof(*addr_iter));
-    targets[i]->flags = HOST_UP;
-    i++;
-    addr_iter++;
+  /* Second, make an array of pointer to DNS::Request to suit the interface of
+     nmap_mass_dns. */
+  DNS::Request *requests = new DNS::Request[n];
+  for (i = 0, addr_iter = addrs.begin(); i < n; i++, addr_iter++) {
+    requests[i].ssv.push_back(*addr_iter);
+    requests[i].type = DNS::PTR;
   }
-  nmap_mass_rdns(targets, n);
+  nmap_mass_dns(requests, n);
   /* Third, make a map from addresses to names for easy lookup. */
   for (i = 0; i < n; i++) {
-    struct sockaddr_storage ss;
-    size_t ss_len;
-    const char *hostname = targets[i]->HostName();
-    if (*hostname == '\0')
-      hostname = NULL;
-    ss_len = sizeof(ss);
-    targets[i]->TargetSockAddr(&ss, &ss_len);
-    name_map[ss] = hostname;
+    std::string &hostname = requests[i].name;
+    if (!hostname.empty())
+      name_map[requests[i].ssv.front()] = hostname.c_str();
   }
   /* Finally, copy the names into the hops. */
   for (host_iter = hosts.begin(); host_iter != hosts.end(); host_iter++) {
     for (hop = (*host_iter)->hops; hop != NULL; hop = hop->parent) {
       if (hop->addr.ss_family != AF_UNSPEC) {
-        const char *hostname = name_map[hop->addr];
-        if (hostname != NULL)
-          hop->hostname = hostname;
+        std::map<sockaddr_storage, const char *, lt_sockaddr_storage>::const_iterator it;
+        it = name_map.find(hop->addr);
+        if (it != name_map.end())
+          hop->hostname = it->second;
       }
     }
   }
-  for (i = 0; i < n; i++)
-    delete targets[i];
-  free(targets);
+  delete [] requests;
 }
 
 void TracerouteState::transfer_hops() {

@@ -5,7 +5,7 @@
  *                                                                         *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2023 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -40,15 +40,16 @@
  * right to know exactly what a program is going to do before they run it.
  * This also allows you to audit the software for security holes.
  *
- * Source code also allows you to port Nmap to new platforms, fix bugs, and add
- * new features. You are highly encouraged to submit your changes as a Github PR
- * or by email to the dev@nmap.org mailing list for possible incorporation into
- * the main distribution. Unless you specify otherwise, it is understood that
- * you are offering us very broad rights to use your submissions as described in
- * the Nmap Public Source License Contributor Agreement. This is important
- * because we fund the project by selling licenses with various terms, and also
- * because the inability to relicense code has caused devastating problems for
- * other Free Software projects (such as KDE and NASM).
+ * Source code also allows you to port Nmap to new platforms, fix bugs, and
+ * add new features. You are highly encouraged to submit your changes as a
+ * Github PR or by email to the dev@nmap.org mailing list for possible
+ * incorporation into the main distribution. Unless you specify otherwise, it
+ * is understood that you are offering us very broad rights to use your
+ * submissions as described in the Nmap Public Source License Contributor
+ * Agreement. This is important because we fund the project by selling licenses
+ * with various terms, and also because the inability to relicense code has
+ * caused devastating problems for other Free Software projects (such as KDE
+ * and NASM).
  *
  * The free version of Nmap is distributed in the hope that it will be
  * useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -69,6 +70,10 @@
 #include "NmapOps.h"
 
 #include <errno.h>
+
+#ifdef WIN32
+#include <mstcpip.h>
+#endif
 
 extern NmapOps o;
 
@@ -125,8 +130,11 @@ ConnectScanInfo::ConnectScanInfo() {
   FD_ZERO(&fds_except);
 }
 
-/* Nothing really to do here. */
-ConnectScanInfo::~ConnectScanInfo() {}
+ConnectScanInfo::~ConnectScanInfo() {
+  if (nextSD >= 0) {
+    close(nextSD);
+  }
+}
 
 bool ConnectScanInfo::sendOK() {
   if (numSDs >= maxSocketsAllowed)
@@ -214,7 +222,7 @@ static void handleConnectResult(UltraScanInfo *USI, HostScanStats *hss,
   bool adjust_timing = true;
   int newportstate = PORT_UNKNOWN;
   int newhoststate = HOST_UNKNOWN;
-  reason_t current_reason = ER_NORESPONSE;
+  reason_t current_reason = ER_UNKNOWN;
   UltraProbe *probe = *probeI;
   struct sockaddr_storage local;
   socklen_t local_len = sizeof(struct sockaddr_storage);
@@ -310,7 +318,10 @@ static void handleConnectResult(UltraScanInfo *USI, HostScanStats *hss,
       error("Strange read error from %s (%d - '%s')", hss->target->targetipstr(), connect_errno, strerror(connect_errno));
       break;
   }
-  if (probe->isPing() && newhoststate != HOST_UNKNOWN ) {
+  if (current_reason == ER_NORESPONSE) {
+    hss->markProbeTimedout(probeI);
+  }
+  else if (probe->isPing() && newhoststate != HOST_UNKNOWN ) {
     ultrascan_ping_update(USI, hss, probeI, &USI->now, adjust_timing);
   } else if (USI->ping_scan && newhoststate != HOST_UNKNOWN) {
     ultrascan_host_probe_update(USI, hss, probeI, newhoststate, &USI->now, adjust_timing);
@@ -368,7 +379,7 @@ static void handleConnectResult(UltraScanInfo *USI, HostScanStats *hss,
 /* Set the socket lingering so we will RST connections instead of wasting
    bandwidth with the four-step close. Set the source address if needed. Bind to
    a specific interface if needed. */
-static void init_socket(int sd) {
+static void init_socket(int sd, const HostScanStats *hss, UltraScanInfo *USI) {
   static int bind_failed = 0;
   struct linger l;
   struct sockaddr_storage ss;
@@ -381,6 +392,47 @@ static void init_socket(int sd) {
     error("Problem setting socket SO_LINGER, errno: %d", socket_errno());
     perror("setsockopt");
   }
+#ifdef WIN32
+  DWORD dwVal;
+  unsigned long to_us = hss->probeTimeout();
+#ifdef TCP_FAIL_CONNECT_ON_ICMP_ERROR
+  // return WSAEHOSTUNREACH on ICMP error. Default is to ignore!
+  dwVal = 1;
+  if (setsockopt(sd, IPPROTO_TCP, TCP_FAIL_CONNECT_ON_ICMP_ERROR, (const char *) &dwVal, sizeof(dwVal)) != 0) {
+    error("Problem setting socket TCP_FAIL_CONNECT_ON_ICMP_ERROR, errno: %d", socket_errno());
+    perror("setsockopt");
+  }
+#endif
+
+  int err, opt;
+  do {
+    err = ERROR_SUCCESS;
+    if (USI->has_tcp_maxrtms) {
+      opt = TCP_MAXRTMS;
+      dwVal = to_us / 1000; // connect timeout in milliseconds
+    }
+    else {
+      opt = TCP_MAXRT;
+      dwVal = to_us / 1000000; // connect timeout in seconds
+    }
+    dwVal = MAX(dwVal, 1);
+    if (setsockopt(sd, IPPROTO_TCP, opt, (const char*)&dwVal, sizeof(dwVal)) != 0) {
+      err = socket_errno();
+      error("Problem setting socket TCP_MAXRT (%d), errno: %d", opt, err);
+      perror("setsockopt");
+      USI->has_tcp_maxrtms = false;
+    }
+  } while (err == WSAENOPROTOOPT && opt == TCP_MAXRTMS);
+
+  dwVal = 0;
+  TCP_INITIAL_RTO_PARAMETERS params = { 1000 /* ms RTT */,
+    TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS };
+  if (WSAIoctl(sd, SIO_TCP_INITIAL_RTO, &params, sizeof(params), NULL, 0, &dwVal, NULL, NULL)) {
+    error("Problem setting SIO_TCP_INITIAL_RTO, errno: %d", socket_errno());
+    perror("WSAIoctl");
+  }
+#endif
+
   if (o.spoofsource && !bind_failed) {
     o.SourceSockAddr(&ss, &sslen);
     if (::bind(sd, (struct sockaddr*)&ss, sslen) != 0) {
@@ -425,7 +477,7 @@ UltraProbe *sendConnectScanProbe(UltraScanInfo *USI, HostScanStats *hss,
   CP->sd = CSI->getSocket();
   assert(CP->sd > 0);
   unblock_socket(CP->sd);
-  init_socket(CP->sd);
+  init_socket(CP->sd, hss, USI);
   set_ttl(CP->sd, o.ttl);
   if (o.ipoptionslen)
     set_ipoptions(CP->sd, o.ipoptions, o.ipoptionslen);
@@ -437,11 +489,11 @@ UltraProbe *sendConnectScanProbe(UltraScanInfo *USI, HostScanStats *hss,
 #if HAVE_IPV6
   else sin6->sin6_port = htons(probe->pspec()->pd.tcp.dport);
 #endif
-  probe->sent = USI->now;
   /* We don't record a byte count for connect probes. */
   hss->probeSent(0);
   rc = connect(CP->sd, (struct sockaddr *)&sock, socklen);
   gettimeofday(&USI->now, NULL);
+  probe->sent = USI->now;
   if (rc == -1)
     connect_errno = socket_errno();
   /* This counts as probe being sent, so update structures */
@@ -463,6 +515,7 @@ UltraProbe *sendConnectScanProbe(UltraScanInfo *USI, HostScanStats *hss,
     handleConnectResult(USI, hss, probeI, connect_errno, true);
     probe = NULL;
   }
+  // Not sure if we need to call this again:
   gettimeofday(&USI->now, NULL);
   return probe;
 }
@@ -505,9 +558,8 @@ bool do_one_select_round(UltraScanInfo *USI, struct timeval *stime) {
       usleep(timeleft * 1000);
       selectres = 0;
     }
+    gettimeofday(&USI->now, NULL);
   } while (selectres == -1 && err == EINTR);
-
-  gettimeofday(&USI->now, NULL);
 
   if (selectres == -1)
     pfatal("select failed in %s()", __func__);

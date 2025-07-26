@@ -2,7 +2,7 @@
 
 # ***********************IMPORTANT NMAP LICENSE TERMS************************
 # *
-# * The Nmap Security Scanner is (C) 1996-2023 Nmap Software LLC ("The Nmap
+# * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
 # * Project"). Nmap is also a registered trademark of the Nmap Project.
 # *
 # * This program is distributed under the terms of the Nmap Public Source
@@ -37,15 +37,16 @@
 # * right to know exactly what a program is going to do before they run it.
 # * This also allows you to audit the software for security holes.
 # *
-# * Source code also allows you to port Nmap to new platforms, fix bugs, and add
-# * new features. You are highly encouraged to submit your changes as a Github PR
-# * or by email to the dev@nmap.org mailing list for possible incorporation into
-# * the main distribution. Unless you specify otherwise, it is understood that
-# * you are offering us very broad rights to use your submissions as described in
-# * the Nmap Public Source License Contributor Agreement. This is important
-# * because we fund the project by selling licenses with various terms, and also
-# * because the inability to relicense code has caused devastating problems for
-# * other Free Software projects (such as KDE and NASM).
+# * Source code also allows you to port Nmap to new platforms, fix bugs, and
+# * add new features. You are highly encouraged to submit your changes as a
+# * Github PR or by email to the dev@nmap.org mailing list for possible
+# * incorporation into the main distribution. Unless you specify otherwise, it
+# * is understood that you are offering us very broad rights to use your
+# * submissions as described in the Nmap Public Source License Contributor
+# * Agreement. This is important because we fund the project by selling licenses
+# * with various terms, and also because the inability to relicense code has
+# * caused devastating problems for other Free Software projects (such as KDE
+# * and NASM).
 # *
 # * The free version of Nmap is distributed in the hope that it will be
 # * useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -60,6 +61,10 @@ import signal
 import sys
 import configparser
 import shutil
+
+# https://docs.python.org/3/whatsnew/3.8.html#bpo-36085-whatsnew
+if hasattr(os, "add_dll_directory"):
+    os.add_dll_directory(os.path.dirname(sys.executable))
 
 # Cause an exception if PyGTK can't open a display. Normally this just
 # produces a warning, but the lack of a display eventually causes a
@@ -214,17 +219,18 @@ def run():
                 message_format=_(
                     "Error creating the per-user configuration directory"),
                 secondary_text=_("""\
-There was an error creating the directory %s or one of the files in it. \
-The directory is created by copying the contents of %s. \
+There was an error creating the directory %(dirname)s or one of the files in it. \
+The directory is created by copying the contents of %(configdir)s. \
 The specific error was
 
-%s
+%(error)s
 
-%s needs to create this directory to store information such as the list of \
-scan profiles. Check for access to the directory and try again.""") % (
-                    repr(Path.user_config_dir), repr(Path.config_dir),
-                    repr(str(e)), APP_DISPLAY_NAME
-                    )
+%(zenmap)s needs to create this directory to store information such as the list of \
+scan profiles. Check for access to the directory and try again.""") % {
+                    'dirname': repr(Path.user_config_dir),
+                    'configdir': repr(Path.config_dir),
+                    'error': repr(str(e)), 'zenmap': APP_DISPLAY_NAME
+                    }
                 )
         error_dialog.run()
         error_dialog.destroy()
@@ -240,13 +246,15 @@ scan profiles. Check for access to the directory and try again.""") % (
         error_dialog = HIGAlertDialog(
                 message_format=_("Error parsing the configuration file"),
                 secondary_text=_("""\
-There was an error parsing the configuration file %s. \
+There was an error parsing the configuration file %(filename)s. \
 The specific error was
 
-%s
+%(error)s
 
-%s can continue without this file but any information in it will be ignored \
-until it is repaired.""") % (Path.user_config_file, str(e), APP_DISPLAY_NAME)
+%(zenmap)s can continue without this file but any information in it will be ignored \
+until it is repaired.""") % {
+    'filename': Path.user_config_file,
+    'error': str(e), 'zenmap': APP_DISPLAY_NAME}
                 )
         error_dialog.run()
         error_dialog.destroy()
@@ -255,11 +263,12 @@ until it is repaired.""") % (Path.user_config_file, str(e), APP_DISPLAY_NAME)
                 type=Gtk.MessageType.QUESTION,
                 message_format=_("Restore default configuration?"),
                 secondary_text=_("""\
-To avoid further errors parsing the configuration file %s, \
-you can copy the default configuration from %s.
+To avoid further errors parsing the configuration file %(filename)s, \
+you can copy the default configuration from %(dirname)s.
 
 Do this now? \
-""") % (Path.user_config_file, global_config_path),
+""") % {
+    'filename': Path.user_config_file, 'dirname': global_config_path},
                 )
         repair_dialog.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
         repair_dialog.set_default_response(Gtk.ResponseType.CANCEL)
@@ -313,10 +322,10 @@ Do this now? \
 
 class NonRootWarning (HIGAlertDialog):
     def __init__(self):
-        warning_text = _('''You are trying to run %s with a non-root user!
+        warning_text = _('''You are trying to run %(zenmap)s with a non-root user!
 
-Some %s options need root privileges to work.''') % (
-            APP_DISPLAY_NAME, NMAP_DISPLAY_NAME)
+Some %(nmap)s options need root privileges to work.''') % {
+        'zenmap': APP_DISPLAY_NAME, 'nmap': NMAP_DISPLAY_NAME}
 
         HIGAlertDialog.__init__(self, message_format=_('Non-root user'),
                                 secondary_text=warning_text)

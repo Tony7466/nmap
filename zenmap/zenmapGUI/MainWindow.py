@@ -2,7 +2,7 @@
 
 # ***********************IMPORTANT NMAP LICENSE TERMS************************
 # *
-# * The Nmap Security Scanner is (C) 1996-2023 Nmap Software LLC ("The Nmap
+# * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
 # * Project"). Nmap is also a registered trademark of the Nmap Project.
 # *
 # * This program is distributed under the terms of the Nmap Public Source
@@ -37,15 +37,16 @@
 # * right to know exactly what a program is going to do before they run it.
 # * This also allows you to audit the software for security holes.
 # *
-# * Source code also allows you to port Nmap to new platforms, fix bugs, and add
-# * new features. You are highly encouraged to submit your changes as a Github PR
-# * or by email to the dev@nmap.org mailing list for possible incorporation into
-# * the main distribution. Unless you specify otherwise, it is understood that
-# * you are offering us very broad rights to use your submissions as described in
-# * the Nmap Public Source License Contributor Agreement. This is important
-# * because we fund the project by selling licenses with various terms, and also
-# * because the inability to relicense code has caused devastating problems for
-# * other Free Software projects (such as KDE and NASM).
+# * Source code also allows you to port Nmap to new platforms, fix bugs, and
+# * add new features. You are highly encouraged to submit your changes as a
+# * Github PR or by email to the dev@nmap.org mailing list for possible
+# * incorporation into the main distribution. Unless you specify otherwise, it
+# * is understood that you are offering us very broad rights to use your
+# * submissions as described in the Nmap Public Source License Contributor
+# * Agreement. This is important because we fund the project by selling licenses
+# * with various terms, and also because the inability to relicense code has
+# * caused devastating problems for other Free Software projects (such as KDE
+# * and NASM).
 # *
 # * The free version of Nmap is distributed in the hope that it will be
 # * useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -127,16 +128,30 @@ def can_print():
 
 
 class ScanWindow(UmitScanWindow):
+
+    dark_mode = None
+
     def __init__(self):
         UmitScanWindow.__init__(self)
 
         window = WindowConfig()
+        settings = Gtk.Settings.get_default()
+
+        if ScanWindow.dark_mode is None:
+            ScanWindow.dark_mode = (window.dark_mode == "True")
+            settings.set_property(
+                    "gtk-application-prefer-dark-theme",
+                    ScanWindow.dark_mode)
 
         self.set_title(_(APP_DISPLAY_NAME))
         self.move(window.x, window.y)
         self.set_default_size(window.width, window.height)
 
         self.scan_interface = ScanInterface()
+        # Update highlighting
+        output_viewer = self.scan_interface.scan_result.scan_result_notebook.nmap_output.nmap_output
+        output_viewer.nmap_highlight.set_dark_mode(
+                ScanWindow.dark_mode)
 
         self.main_accel_group = Gtk.AccelGroup()
 
@@ -302,6 +317,13 @@ class ScanWindow(UmitScanWindow):
                 None,
                 _('Shows the application help'),
                 self._help_cb),
+
+            ('Toggle Dark Mode',
+                None,
+                _('Toggle Dark Mode'),
+                None,
+                None,
+                self._toggle_dark),
             ]
 
         # See info on UIManager at:
@@ -344,6 +366,7 @@ class ScanWindow(UmitScanWindow):
         <menu action='Profile'>
             <menuitem action='New Profile'/>
             <menuitem action='Edit Profile'/>
+            <menuitem action='Toggle Dark Mode'/>
         </menu>
 
         <menu action='Help'>
@@ -766,6 +789,18 @@ This scan has not been run yet. Start the scan with the "Scan" button first.'))
     def _help_cb(self, action):
         self.show_help()
 
+    def _toggle_dark(self, action):
+        ScanWindow.dark_mode = not ScanWindow.dark_mode
+        settings = Gtk.Settings.get_default()
+        settings.set_property("gtk-application-prefer-dark-theme",
+            ScanWindow.dark_mode)
+        # Update highlighting
+        output_viewer = self.scan_interface.scan_result.scan_result_notebook.nmap_output.nmap_output
+        output_viewer.nmap_highlight.set_dark_mode(
+                ScanWindow.dark_mode)
+        output_viewer.apply_highlighting()
+
+
     def _exit_cb(self, *args):
         """Closes the window, prompting for confirmation if necessary. If one
         of the tabs couldn't be closed, the function returns True and doesn't
@@ -854,15 +889,19 @@ This scan has not been run yet. Start the scan with the "Scan" button first.'))
         window = WindowConfig()
         window.x, window.y = self.get_position()
         window.width, window.height = self.get_size()
+        window.dark_mode = ScanWindow.dark_mode
         window.save_changes()
         if config_parser.failed:
             alert = HIGAlertDialog(
                     message_format=_("Can't save Zenmap configuration"),
                     # newline before path to help avoid weird line wrapping
                     secondary_text=_(
-                        'An error occurred when saving to\n%s'
-                        '\nThe error was: %s.'
-                        ) % (Path.user_config_file, config_parser.failed))
+                        'An error occurred when saving to\n%(configfile)s'
+                        '\nThe error was: %(error)s.'
+                        ) % {
+                            'configfile': Path.user_config_file,
+                            'error': config_parser.failed
+                            })
             alert.run()
             alert.destroy()
 
@@ -907,9 +946,10 @@ This scan has not been run yet. Start the scan with the "Scan" button first.'))
             d = HIGAlertDialog(parent=self,
                                message_format=_("Can't find documentation files"),
                                secondary_text=_("""\
-There was an error loading the documentation file %s (%s). See the \
-online documentation at %s.\
-""") % (doc_path, str(e), APP_DOCUMENTATION_SITE))
+There was an error loading the documentation file %(helpfile)s (%(error)s). See the \
+online documentation at %(url)s.\
+""") % {
+    'helpfile': doc_path, 'error': str(e), 'url': APP_DOCUMENTATION_SITE})
             d.run()
             d.destroy()
 

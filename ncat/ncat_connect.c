@@ -2,7 +2,7 @@
  * ncat_connect.c -- Ncat connect mode.                                    *
  ***********************IMPORTANT NMAP LICENSE TERMS************************
  *
- * The Nmap Security Scanner is (C) 1996-2023 Nmap Software LLC ("The Nmap
+ * The Nmap Security Scanner is (C) 1996-2025 Nmap Software LLC ("The Nmap
  * Project"). Nmap is also a registered trademark of the Nmap Project.
  *
  * This program is distributed under the terms of the Nmap Public Source
@@ -37,15 +37,16 @@
  * right to know exactly what a program is going to do before they run it.
  * This also allows you to audit the software for security holes.
  *
- * Source code also allows you to port Nmap to new platforms, fix bugs, and add
- * new features. You are highly encouraged to submit your changes as a Github PR
- * or by email to the dev@nmap.org mailing list for possible incorporation into
- * the main distribution. Unless you specify otherwise, it is understood that
- * you are offering us very broad rights to use your submissions as described in
- * the Nmap Public Source License Contributor Agreement. This is important
- * because we fund the project by selling licenses with various terms, and also
- * because the inability to relicense code has caused devastating problems for
- * other Free Software projects (such as KDE and NASM).
+ * Source code also allows you to port Nmap to new platforms, fix bugs, and
+ * add new features. You are highly encouraged to submit your changes as a
+ * Github PR or by email to the dev@nmap.org mailing list for possible
+ * incorporation into the main distribution. Unless you specify otherwise, it
+ * is understood that you are offering us very broad rights to use your
+ * submissions as described in the Nmap Public Source License Contributor
+ * Agreement. This is important because we fund the project by selling licenses
+ * with various terms, and also because the inability to relicense code has
+ * caused devastating problems for other Free Software projects (such as KDE
+ * and NASM).
  *
  * The free version of Nmap is distributed in the hope that it will be
  * useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -193,8 +194,6 @@ static void set_ssl_ctx_options(SSL_CTX *ctx)
         bye("Unable to set OpenSSL cipher list: %s", ERR_error_string(ERR_get_error(), NULL));
     }
 
-#ifdef HAVE_ALPN_SUPPORT
-
     if (o.sslalpn) {
         size_t alpn_len;
         unsigned char *alpn = next_protos_parse(&alpn_len, o.sslalpn);
@@ -213,8 +212,6 @@ static void set_ssl_ctx_options(SSL_CTX *ctx)
 
         free(alpn);
     }
-
-#endif
 
 }
 #endif
@@ -976,7 +973,7 @@ int ncat_connect(void)
     nsock_pool_set_broadcast(mypool, 1);
 
 #ifdef HAVE_OPENSSL
-#ifdef HAVE_DTLS_CLIENT_METHOD
+#ifndef OPENSSL_NO_DTLS
     if(o.proto == IPPROTO_UDP)
         set_ssl_ctx_options((SSL_CTX *) nsock_pool_dtls_init(mypool, 0));
     else
@@ -1081,7 +1078,7 @@ int ncat_connect(void)
         struct timeval end_time;
         double time;
         gettimeofday(&end_time, NULL);
-        time = TIMEVAL_MSEC_SUBTRACT(end_time, start_time) / 1000.0;
+        time = TIMEVAL_FSEC_SUBTRACT(end_time, start_time);
         loguser("%lu bytes sent, %lu bytes received in %.2f seconds.\n",
             nsock_iod_get_write_count(cs.sock_nsi),
             nsock_iod_get_read_count(cs.sock_nsi), time);
@@ -1223,7 +1220,7 @@ static void post_connect(nsock_pool nsp, nsock_iod iod)
 {
     /* Command to execute. */
     if (o.cmdexec) {
-        struct fdinfo info;
+        struct fdinfo info = { 0 };
 
         info.fd = nsock_iod_get_sd(iod);
 #ifdef HAVE_OPENSSL
@@ -1252,7 +1249,7 @@ static void post_connect(nsock_pool nsp, nsock_iod iod)
        refresh_idle_timer. */
     if (o.idletimeout > 0) {
         cs.idle_timer_event_id =
-            nsock_timer_create(nsp, idle_timer_handler, o.idletimeout, NULL);
+            nsock_timer_create(nsp, idle_timer_handler, o.idletimeout, &o.idletimeout);
     }
 }
 
@@ -1277,9 +1274,15 @@ static void read_stdin_handler(nsock_pool nsp, nsock_event evt, void *data)
 #endif
                 shutdown(nsock_iod_get_sd(cs.sock_nsi), SHUT_WR);
         }
-        /* In --send-only mode or non-TCP mode, exit after EOF on stdin. */
-        if (o.proto != IPPROTO_TCP || (o.proto == IPPROTO_TCP && o.sendonly))
+        if (o.quitafter > 0) {
+            nsock_timer_create(nsp, idle_timer_handler, o.quitafter, &o.quitafter);
+        }
+        // if o.quitafter is negative, do not quit even on EOF
+        else if (o.quitafter == 0 &&
+                /* In --send-only mode or non-TCP mode, exit after EOF on stdin. */
+                (o.proto != IPPROTO_TCP || (o.proto == IPPROTO_TCP && o.sendonly))) {
             nsock_loop_quit(nsp);
+        }
         return;
     } else if (status == NSE_STATUS_ERROR) {
         loguser("%s.\n", socket_strerror(nse_errorcode(evt)));
@@ -1328,9 +1331,10 @@ static void read_socket_handler(nsock_pool nsp, nsock_event evt, void *data)
 #else
         Close(STDOUT_FILENO);
 #endif
-        /* In --recv-only mode or non-TCP mode, exit after EOF on the socket. */
-        if (o.proto != IPPROTO_TCP || (o.proto == IPPROTO_TCP && o.recvonly))
-            nsock_loop_quit(nsp);
+        /* For TCP, --keep-open means don't quit unless --recv-only */
+        if (!o.keepopen || o.proto != IPPROTO_TCP || o.recvonly) {
+          nsock_loop_quit(nsp);
+        }
         return;
     } else if (status == NSE_STATUS_ERROR) {
         if (!o.zerobyte||o.verbose)
@@ -1395,6 +1399,7 @@ static void idle_timer_handler(nsock_pool nsp, nsock_event evt, void *data)
 {
     enum nse_status status = nse_status(evt);
     enum nse_type type = nse_type(evt);
+    int timeout = *(int *)data;
 
     ncat_assert(type == NSE_TYPE_TIMER);
 
@@ -1410,7 +1415,7 @@ static void idle_timer_handler(nsock_pool nsp, nsock_event evt, void *data)
       return;
     }
 
-    loguser("Idle timeout expired (%d ms).\n", o.idletimeout);
+    loguser("Idle timeout expired (%d ms).\n", timeout);
 
     exit(1);
 }
@@ -1421,5 +1426,5 @@ static void refresh_idle_timer(nsock_pool nsp)
         return;
     nsock_event_cancel(nsp, cs.idle_timer_event_id, 0);
     cs.idle_timer_event_id =
-        nsock_timer_create(nsp, idle_timer_handler, o.idletimeout, NULL);
+        nsock_timer_create(nsp, idle_timer_handler, o.idletimeout, &o.idletimeout);
 }
